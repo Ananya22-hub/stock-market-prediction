@@ -6,152 +6,217 @@ import yfinance as yf
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-# Define available indices and stock tickers
+# =========================
+# PAGE CONFIG
+# =========================
+st.set_page_config(
+    page_title="Market Forecast App",
+    page_icon="📈",
+    layout="wide"
+)
+
+# =========================
+# DARK UI
+# =========================
+st.markdown("""
+<style>
+.main { background-color: #020617; }
+h1, h2, h3 { color: #38bdf8; }
+.css-18e3th9, .css-1d391kg { background-color: #020617; }
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# TITLE
+# =========================
+st.title("📊 Stock, Index & Commodity Forecast Dashboard")
+
+# =========================
+# SAFE CLOSE COLUMN HANDLER
+# =========================
+def normalize_close_column(df):
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+    return df.dropna()
+
+# =========================
+# DATA SOURCES
+# =========================
 indices = {
-    'Nifty 50': '^NSEI',
-    'Sensex': '^BSESN',
-    'Nifty Bank': '^NSEBANK',
-    'Nifty IT': '^NSEIT',
-    'S&P BSE Small Cap': '^BSESMLCAP'
+    "Nifty 50": "^NSEI",
+    "Sensex": "^BSESN",
+    "Nifty Bank": "^NSEBANK",
+    "Nifty IT": "^NSEIT"
 }
 
-nifty50_tickers = [
-    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'HINDUNILVR.NS', 'INFY.NS',
-    'HDFC.NS', 'ICICIBANK.NS', 'KOTAKBANK.NS', 'LT.NS', 'ITC.NS',
-    'SBIN.NS', 'AXISBANK.NS', 'BAJFINANCE.NS', 'MARUTI.NS', 'NTPC.NS',
-    'HCLTECH.NS', 'M&M.NS', 'ULTRACEMCO.NS', 'ONGC.NS', 'POWERGRID.NS',
-    'SUNPHARMA.NS', 'TATAMOTORS.NS', 'WIPRO.NS', 'HDFC LIFE.NS', 'TATACONSUM.NS',
-    'DIVISLAB.NS', 'TECHM.NS', 'DRREDDY.NS', 'SHREECEM.NS', 'JSW STEEL.NS',
-    'BHARTIARTL.NS', 'ADANIGREEN.NS', 'GAIL.NS', 'CIPLA.NS', 'IOC.NS',
-    'HEROMOTOCO.NS', 'TATAPOWER.NS', 'MUTHOOTFIN.NS', 'SBI LIFE.NS', 'BAJAJ AUTO.NS',
-    'LUPIN.NS', 'TATASTEEL.NS', 'SAIL.NS', 'ICICI PRU.NS', 'AMBUJACEM.NS'
+commodities = {
+    "Gold": "GC=F",
+    "Silver": "SI=F"
+}
+
+nifty50 = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS",
+    "ICICIBANK.NS", "HINDUNILVR.NS", "ITC.NS"
 ]
 
-# Streamlit app
-st.title('Indian Stock Market Indices Forecast')
+# =========================
+# SIDEBAR
+# =========================
+selection = st.sidebar.radio(
+    "📌 Data Source",
+    ["Indices", "Nifty 50 Stocks", "Gold & Silver", "Upload CSV"]
+)
 
-# Initialize ticker variable
 ticker = None
+stock_data = None
 
-# Sidebar for selecting index or stock
-selection = st.sidebar.radio("Select Data Source", ["Indices", "Nifty 50 Stocks", "Upload CSV"])
-
+# =========================
+# LOAD DATA
+# =========================
 if selection == "Indices":
-    selected_index = st.sidebar.selectbox("Select Index", options=list(indices.keys()))
-    ticker = indices[selected_index]
-    stock_data = yf.download(ticker, period='1y')
+    name = st.sidebar.selectbox("Select Index", indices.keys())
+    ticker = indices[name]
+    stock_data = yf.download(ticker, period="1y")
+
 elif selection == "Nifty 50 Stocks":
-    selected_stock = st.sidebar.selectbox("Select Stock", options=nifty50_tickers)
-    ticker = selected_stock
-    stock_data = yf.download(ticker, period='1y')
+    ticker = st.sidebar.selectbox("Select Stock", nifty50)
+    stock_data = yf.download(ticker, period="1y")
+
+elif selection == "Gold & Silver":
+    name = st.sidebar.selectbox("Select Commodity", commodities.keys())
+    ticker = commodities[name]
+    stock_data = yf.download(ticker, period="1y")
+
 elif selection == "Upload CSV":
-    uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-    if uploaded_file is not None:
-        stock_data = pd.read_csv(uploaded_file, index_col=0, parse_dates=True)
-        st.sidebar.write(f"CSV file uploaded with {len(stock_data)} rows.")
-        st.write(stock_data.head())  # Display the first few rows of the uploaded file
-    else:
-        st.sidebar.write("Please upload a CSV file.")
-        stock_data = None
+    file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    if file:
+        stock_data = pd.read_csv(file, index_col=0, parse_dates=True)
+        ticker = "Uploaded CSV"
+        if 'Close' not in stock_data.columns:
+            st.error("CSV must contain a 'Close' column")
+            stock_data = None
 
+# =========================
+# MAIN LOGIC
+# =========================
 if stock_data is not None and not stock_data.empty:
-    # Calculate daily profit and loss
-    stock_data['Profit/Loss'] = stock_data['Close'].diff()
-    stock_data['Profit/Loss Color'] = np.where(stock_data['Profit/Loss'] > 0, 'green', 'red')
 
-    # Display ticker information
-    if ticker is None:
-        ticker = "Uploaded CSV Data"
+    stock_data = normalize_close_column(stock_data)
 
-    # Show live data
-    st.subheader(f'Live Data for {ticker}')
-    st.write(stock_data[['Open', 'High', 'Low', 'Close']])
+    # =========================
+    # METRIC
+    # =========================
+    latest_price = stock_data['Close'].iloc[-1]
+    st.metric("💰 Latest Price", f"{latest_price:,.2f}")
 
-    # Plot live data with plotly
-    def plot_live_data(data):
-        fig = go.Figure()
+    # =========================
+    # TABLE
+    # =========================
+    st.subheader("📄 Market Data")
+    st.dataframe(
+        stock_data[['Open','High','Low','Close']],
+        use_container_width=True
+    )
 
-        # Add traces for Open, High, Low, and Close prices
-        fig.add_trace(go.Scatter(x=data.index, y=data['Open'], mode='lines', name='Open Price', line=dict(color='cyan', dash='dash')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close Price', line=dict(color='blue')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['High'], mode='lines', name='High Price', line=dict(color='green', dash='dash')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['Low'], mode='lines', name='Low Price', line=dict(color='red', dash='dash')))
+    # =========================
+    # LIVE CHART
+    # =========================
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=stock_data.index,
+        y=stock_data['Close'],
+        name="Close Price",
+        line=dict(color="#38bdf8")
+    ))
+    fig.update_layout(
+        title=f"📈 Live Price - {ticker}",
+        template="plotly_dark",
+        height=500
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-        # Add profit/loss indicators
-        for i in range(1, len(data)):
-            if data['Profit/Loss'].iloc[i] > 0:
-                fig.add_trace(go.Scatter(x=[data.index[i]], y=[data['Close'].iloc[i]], mode='markers+text',
-                                         marker=dict(color='green', symbol='triangle-up', size=10),
-                                         text=[f'{data["Profit/Loss"].iloc[i]:.2f}'], textposition='top center'))
-            elif data['Profit/Loss'].iloc[i] < 0:
-                fig.add_trace(go.Scatter(x=[data.index[i]], y=[data['Close'].iloc[i]], mode='markers+text',
-                                         marker=dict(color='red', symbol='triangle-down', size=10),
-                                         text=[f'{data["Profit/Loss"].iloc[i]:.2f}'], textposition='bottom center'))
+    # =========================
+    # FORECAST MODELS
+    # =========================
+    def arima_forecast(data, steps=1260):  # 5 years
+        model = ARIMA(data['Close'], order=(5,1,0))
+        fit = model.fit()
+        forecast = fit.forecast(steps)
+        idx = pd.date_range(data.index[-1], periods=steps+1, freq='B')[1:]
+        return pd.DataFrame({"Forecast": forecast}, index=idx)
 
-        fig.update_layout(title=f'Live Prices and Profit/Loss for {ticker}', xaxis_title='Date', yaxis_title='Price',
-                          xaxis_rangeslider_visible=False, template='plotly_white')
+    def sarima_forecast(data, steps=1260):  # FIXED SARIMA
+        model = SARIMAX(
+            data['Close'],
+            order=(1,1,1),
+            seasonal_order=(0,1,1,252),  # yearly seasonality
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        fit = model.fit(disp=False)
+        forecast = fit.get_forecast(steps)
+        df = forecast.summary_frame()
 
-        st.plotly_chart(fig, use_container_width=True)
+        df = df[['mean','mean_ci_lower','mean_ci_upper']]
+        df.columns = ['Forecast','Lower','Upper']
 
-    plot_live_data(stock_data)
+        idx = pd.date_range(
+            start=data.index[-1] + pd.Timedelta(days=1),
+            periods=steps,
+            freq='B'
+        )
+        df.index = idx
+        return df
 
-    # Function to plot with indicators
-    def plot_with_indicators(data, forecast_df, title):
-        fig = go.Figure()
+    # =========================
+    # FORECAST UI
+    # =========================
+    st.sidebar.subheader("🔮 Forecast")
+    model_choice = st.sidebar.radio("Model", ["ARIMA", "SARIMA"])
 
-        # Plot historical prices
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Historical Prices', line=dict(color='blue')))
+    if st.sidebar.button("🚀 Generate Forecast"):
 
-        # Plot forecasted prices
-        fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='Forecasted Prices', line=dict(color='orange')))
-        
-        if 'Lower Bound' in forecast_df.columns and 'Upper Bound' in forecast_df.columns:
-            fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Lower Bound'], mode='lines', name='Lower Bound', line=dict(color='orange', dash='dash')))
-            fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Upper Bound'], mode='lines', name='Upper Bound', line=dict(color='orange', dash='dash')))
-        else:
-            st.warning("Forecast Data does not include 'Lower Bound' and 'Upper Bound' columns.")
+        forecast_df = (
+            arima_forecast(stock_data)
+            if model_choice == "ARIMA"
+            else sarima_forecast(stock_data)
+        )
 
-        # Add arrows for price movement
-        for i in range(1, len(data)):
-            if data['Close'].iloc[i] > data['Close'].iloc[i - 1]:
-                fig.add_annotation(x=data.index[i], y=data['Close'].iloc[i], ax=data.index[i - 1], ay=data['Close'].iloc[i - 1],
-                                   arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor='green', showarrow=True)
-            elif data['Close'].iloc[i] < data['Close'].iloc[i - 1]:
-                fig.add_annotation(x=data.index[i], y=data['Close'].iloc[i], ax=data.index[i - 1], ay=data['Close'].iloc[i - 1],
-                                   arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor='red', showarrow=True)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=stock_data.index,
+            y=stock_data['Close'],
+            name="Historical",
+            line=dict(color="#22c55e")
+        ))
+        fig2.add_trace(go.Scatter(
+            x=forecast_df.index,
+            y=forecast_df['Forecast'],
+            name="Forecast",
+            line=dict(color="#f97316")
+        ))
 
-        fig.update_layout(title=title, xaxis_title='Date', yaxis_title='Price', template='plotly_white')
+        if "Lower" in forecast_df.columns:
+            fig2.add_trace(go.Scatter(
+                x=forecast_df.index,
+                y=forecast_df['Lower'],
+                name="Lower Bound",
+                line=dict(dash="dash")
+            ))
+            fig2.add_trace(go.Scatter(
+                x=forecast_df.index,
+                y=forecast_df['Upper'],
+                name="Upper Bound",
+                line=dict(dash="dash")
+            ))
 
-        st.plotly_chart(fig, use_container_width=True)
+        fig2.update_layout(
+            title=f"📉 {ticker} 5-Year Forecast ({model_choice})",
+            template="plotly_dark",
+            height=500
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
-    # Forecasting models
-    def forecast_with_arima(data, steps=30):
-        model = ARIMA(data['Close'], order=(5, 1, 0))
-        model_fit = model.fit()
-        forecast = model_fit.forecast(steps=steps)
-        forecast_df = pd.DataFrame({'Forecast': forecast})
-        forecast_df.index = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=steps, freq='B')
-        return forecast_df
-
-    def forecast_with_sarima(data, steps=30):
-        # Adjusted seasonal_order to avoid overlap with non-seasonal order
-        model = SARIMAX(data['Close'], order=(5, 1, 0), seasonal_order=(1, 1, 1, 5))
-        model_fit = model.fit(disp=False)
-        forecast = model_fit.get_forecast(steps=steps)
-        forecast_df = forecast.summary_frame()
-        forecast_df = forecast_df[['mean', 'mean_ci_lower', 'mean_ci_upper']]
-        forecast_df.columns = ['Forecast', 'Lower Bound', 'Upper Bound']
-        forecast_df.index = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=steps, freq='B')
-        return forecast_df
-
-    # Forecasting options
-    forecast_method = st.sidebar.radio("Choose Forecasting Method", ["ARIMA", "SARIMA"])
-
-    if st.sidebar.button("Generate Forecast"):
-        if forecast_method == "ARIMA":
-            forecast_df = forecast_with_arima(stock_data)
-        else:
-            forecast_df = forecast_with_sarima(stock_data)
-        plot_with_indicators(stock_data, forecast_df, f'{ticker} - {forecast_method} Forecast')
 else:
-    st.write("No data available. Please select a data source or upload a CSV file.")
+    st.info("👈 Select a data source from sidebar to begin")
