@@ -3,156 +3,228 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-import yfinance as yf
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
+import warnings
 
-# Define available indices and stock tickers
-indices = {
-    'Nifty 50': '^NSEI',
-    'Sensex': '^BSESN',
-    'Nifty Bank': '^NSEBANK',
-    'Nifty IT': '^NSEIT',
-    'S&P BSE Small Cap': '^BSESMLCAP'
+warnings.filterwarnings("ignore")
+
+st.set_page_config(
+    page_title="Indian Market Intelligence",
+    page_icon="🇮🇳",
+    layout="wide"
+)
+
+# =========================
+# STYLE
+# =========================
+st.markdown("""
+<style>
+h1 {
+    background: linear-gradient(90deg,#f97316,#22c55e);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+section[data-testid="stSidebar"] {
+    background-color: #020617;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# HELPERS
+# =========================
+def normalize(df):
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+    df = df.dropna(subset=['Close'])
+    df.index = pd.to_datetime(df.index)
+    return df.sort_index()
+
+def future_dates(last_date, steps):
+    return pd.bdate_range(last_date + pd.offsets.BDay(1), periods=steps)
+
+def forecast_with_band(df, steps):
+    prices = df['Close'].values
+    returns = np.diff(prices) / prices[:-1]
+    mean, vol = returns.mean(), returns.std()
+
+    price = prices[-1]
+    f, u, l = [], [], []
+
+    for _ in range(steps):
+        price *= (1 + mean)
+        band = price * vol * 2
+        f.append(price)
+        u.append(price + band)
+        l.append(price - band)
+
+    idx = future_dates(df.index[-1], steps)
+    return pd.DataFrame({"Forecast": f, "Upper": u, "Lower": l}, index=idx)
+
+def market_trend(df):
+    ma50 = df['Close'].rolling(50).mean()
+    if df['Close'].iloc[-1] > ma50.iloc[-1]:
+        return "🟢 BULLISH"
+    elif df['Close'].iloc[-1] < ma50.iloc[-1]:
+        return "🔴 BEARISH"
+    return "🟡 SIDEWAYS"
+
+# =========================
+# DATA LISTS
+# =========================
+banks = {
+    "SBI": "SBIN.NS",
+    "HDFC": "HDFCBANK.NS",
+    "ICICI": "ICICIBANK.NS",
+    "Axis": "AXISBANK.NS",
+    "Kotak": "KOTAKBANK.NS",
+    "PNB": "PNB.NS",
+    "Bank of Baroda": "BANKBARODA.NS",
+    "Canara": "CANBK.NS"
 }
 
-nifty50_tickers = [
-    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'HINDUNILVR.NS', 'INFY.NS',
-    'HDFC.NS', 'ICICIBANK.NS', 'KOTAKBANK.NS', 'LT.NS', 'ITC.NS',
-    'SBIN.NS', 'AXISBANK.NS', 'BAJFINANCE.NS', 'MARUTI.NS', 'NTPC.NS',
-    'HCLTECH.NS', 'M&M.NS', 'ULTRACEMCO.NS', 'ONGC.NS', 'POWERGRID.NS',
-    'SUNPHARMA.NS', 'TATAMOTORS.NS', 'WIPRO.NS', 'HDFC LIFE.NS', 'TATACONSUM.NS',
-    'DIVISLAB.NS', 'TECHM.NS', 'DRREDDY.NS', 'SHREECEM.NS', 'JSW STEEL.NS',
-    'BHARTIARTL.NS', 'ADANIGREEN.NS', 'GAIL.NS', 'CIPLA.NS', 'IOC.NS',
-    'HEROMOTOCO.NS', 'TATAPOWER.NS', 'MUTHOOTFIN.NS', 'SBI LIFE.NS', 'BAJAJ AUTO.NS',
-    'LUPIN.NS', 'TATASTEEL.NS', 'SAIL.NS', 'ICICI PRU.NS', 'AMBUJACEM.NS'
-]
+indices = {
+    "Nifty 50": "^NSEI",
+    "Sensex": "^BSESN",
+    "Nifty Bank": "^NSEBANK",
+    "Nifty IT": "^NSEIT"
+}
 
-# Streamlit app
-st.title('Indian Stock Market Indices Forecast')
+commodities = {
+    "Gold": "GC=F",
+    "Silver": "SI=F"
+}
 
-# Initialize ticker variable
-ticker = None
+# =========================
+# SIDEBAR
+# =========================
+st.sidebar.title("📌 Market Control")
 
-# Sidebar for selecting index or stock
-selection = st.sidebar.radio("Select Data Source", ["Indices", "Nifty 50 Stocks", "Upload CSV"])
+mode = st.sidebar.radio(
+    "Mode",
+    ["Single Market Forecast", "Bank-wise Comparison", "Upload CSV"]
+)
 
-if selection == "Indices":
-    selected_index = st.sidebar.selectbox("Select Index", options=list(indices.keys()))
-    ticker = indices[selected_index]
-    stock_data = yf.download(ticker, period='1y')
-elif selection == "Nifty 50 Stocks":
-    selected_stock = st.sidebar.selectbox("Select Stock", options=nifty50_tickers)
-    ticker = selected_stock
-    stock_data = yf.download(ticker, period='1y')
-elif selection == "Upload CSV":
-    uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-    if uploaded_file is not None:
-        stock_data = pd.read_csv(uploaded_file, index_col=0, parse_dates=True)
-        st.sidebar.write(f"CSV file uploaded with {len(stock_data)} rows.")
-        st.write(stock_data.head())  # Display the first few rows of the uploaded file
+days = st.sidebar.slider("Forecast Days", 30, 300, 120)
+
+# =========================
+# SINGLE MARKET MODE
+# =========================
+if mode == "Single Market Forecast":
+
+    group = st.sidebar.selectbox(
+        "Category",
+        ["Indices", "Banks", "Commodities"]
+    )
+
+    if group == "Indices":
+        name = st.sidebar.selectbox("Select", indices.keys())
+        ticker = indices[name]
+    elif group == "Banks":
+        name = st.sidebar.selectbox("Select", banks.keys())
+        ticker = banks[name]
     else:
-        st.sidebar.write("Please upload a CSV file.")
-        stock_data = None
+        name = st.sidebar.selectbox("Select", commodities.keys())
+        ticker = commodities[name]
 
-if stock_data is not None and not stock_data.empty:
-    # Calculate daily profit and loss
-    stock_data['Profit/Loss'] = stock_data['Close'].diff()
-    stock_data['Profit/Loss Color'] = np.where(stock_data['Profit/Loss'] > 0, 'green', 'red')
+    run = st.sidebar.button("🚀 Generate Forecast")
 
-    # Display ticker information
-    if ticker is None:
-        ticker = "Uploaded CSV Data"
+    df = yf.download(ticker, period="5y", progress=False)
+    df = normalize(df)
 
-    # Show live data
-    st.subheader(f'Live Data for {ticker}')
-    st.write(stock_data[['Open', 'High', 'Low', 'Close']])
+    st.title(f"{name} Dashboard")
+    st.subheader(f"Trend: {market_trend(df)}")
 
-    # Plot live data with plotly
-    def plot_live_data(data):
-        fig = go.Figure()
+    # ---- TABLE ----
+    st.subheader("📄 Market Data")
+    st.dataframe(df[['Open','High','Low','Close']].tail(200),
+                 use_container_width=True)
 
-        # Add traces for Open, High, Low, and Close prices
-        fig.add_trace(go.Scatter(x=data.index, y=data['Open'], mode='lines', name='Open Price', line=dict(color='cyan', dash='dash')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close Price', line=dict(color='blue')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['High'], mode='lines', name='High Price', line=dict(color='green', dash='dash')))
-        fig.add_trace(go.Scatter(x=data.index, y=data['Low'], mode='lines', name='Low Price', line=dict(color='red', dash='dash')))
+    forecast = forecast_with_band(df, days) if run else None
 
-        # Add profit/loss indicators
-        for i in range(1, len(data)):
-            if data['Profit/Loss'].iloc[i] > 0:
-                fig.add_trace(go.Scatter(x=[data.index[i]], y=[data['Close'].iloc[i]], mode='markers+text',
-                                         marker=dict(color='green', symbol='triangle-up', size=10),
-                                         text=[f'{data["Profit/Loss"].iloc[i]:.2f}'], textposition='top center'))
-            elif data['Profit/Loss'].iloc[i] < 0:
-                fig.add_trace(go.Scatter(x=[data.index[i]], y=[data['Close'].iloc[i]], mode='markers+text',
-                                         marker=dict(color='red', symbol='triangle-down', size=10),
-                                         text=[f'{data["Profit/Loss"].iloc[i]:.2f}'], textposition='bottom center'))
+    # ---- CHART ----
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="Historical"))
 
-        fig.update_layout(title=f'Live Prices and Profit/Loss for {ticker}', xaxis_title='Date', yaxis_title='Price',
-                          xaxis_rangeslider_visible=False, template='plotly_white')
+    if forecast is not None:
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Forecast'],
+                                 name="Forecast", line=dict(dash="dot")))
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Upper'],
+                                 showlegend=False, line=dict(width=0)))
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Lower'],
+                                 fill='tonexty', name="Range",
+                                 fillcolor='rgba(34,197,94,0.25)',
+                                 line=dict(width=0)))
 
-        st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(template="plotly_dark", height=550)
+    st.plotly_chart(fig, use_container_width=True)
 
-    plot_live_data(stock_data)
+# =========================
+# BANK COMPARISON
+# =========================
+elif mode == "Bank-wise Comparison":
 
-    # Function to plot with indicators
-    def plot_with_indicators(data, forecast_df, title):
-        fig = go.Figure()
+    st.title("🏦 Bank-wise Comparison & Heatmap")
 
-        # Plot historical prices
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Historical Prices', line=dict(color='blue')))
+    data = {}
+    for name, tick in banks.items():
+        dfb = yf.download(tick, period="1y", progress=False)
+        if not dfb.empty:
+            data[name] = dfb['Close'].pct_change().sum() * 100
 
-        # Plot forecasted prices
-        fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='Forecasted Prices', line=dict(color='orange')))
-        
-        if 'Lower Bound' in forecast_df.columns and 'Upper Bound' in forecast_df.columns:
-            fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Lower Bound'], mode='lines', name='Lower Bound', line=dict(color='orange', dash='dash')))
-            fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Upper Bound'], mode='lines', name='Upper Bound', line=dict(color='orange', dash='dash')))
-        else:
-            st.warning("Forecast Data does not include 'Lower Bound' and 'Upper Bound' columns.")
+    heat_df = pd.DataFrame.from_dict(
+        data, orient='index', columns=['1Y % Change']
+    )
 
-        # Add arrows for price movement
-        for i in range(1, len(data)):
-            if data['Close'].iloc[i] > data['Close'].iloc[i - 1]:
-                fig.add_annotation(x=data.index[i], y=data['Close'].iloc[i], ax=data.index[i - 1], ay=data['Close'].iloc[i - 1],
-                                   arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor='green', showarrow=True)
-            elif data['Close'].iloc[i] < data['Close'].iloc[i - 1]:
-                fig.add_annotation(x=data.index[i], y=data['Close'].iloc[i], ax=data.index[i - 1], ay=data['Close'].iloc[i - 1],
-                                   arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor='red', showarrow=True)
+    fig = go.Figure(data=go.Heatmap(
+        z=heat_df.values,
+        y=heat_df.index,
+        x=heat_df.columns,
+        colorscale='RdYlGn'
+    ))
+    fig.update_layout(height=400, template="plotly_dark")
+    st.plotly_chart(fig, use_container_width=True)
 
-        fig.update_layout(title=title, xaxis_title='Date', yaxis_title='Price', template='plotly_white')
+    st.subheader("📄 Bank Performance Table")
+    st.dataframe(heat_df.style.format("{:.2f}%"))
 
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Forecasting models
-    def forecast_with_arima(data, steps=30):
-        model = ARIMA(data['Close'], order=(5, 1, 0))
-        model_fit = model.fit()
-        forecast = model_fit.forecast(steps=steps)
-        forecast_df = pd.DataFrame({'Forecast': forecast})
-        forecast_df.index = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=steps, freq='B')
-        return forecast_df
-
-    def forecast_with_sarima(data, steps=30):
-        # Adjusted seasonal_order to avoid overlap with non-seasonal order
-        model = SARIMAX(data['Close'], order=(5, 1, 0), seasonal_order=(1, 1, 1, 5))
-        model_fit = model.fit(disp=False)
-        forecast = model_fit.get_forecast(steps=steps)
-        forecast_df = forecast.summary_frame()
-        forecast_df = forecast_df[['mean', 'mean_ci_lower', 'mean_ci_upper']]
-        forecast_df.columns = ['Forecast', 'Lower Bound', 'Upper Bound']
-        forecast_df.index = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=steps, freq='B')
-        return forecast_df
-
-    # Forecasting options
-    forecast_method = st.sidebar.radio("Choose Forecasting Method", ["ARIMA", "SARIMA"])
-
-    if st.sidebar.button("Generate Forecast"):
-        if forecast_method == "ARIMA":
-            forecast_df = forecast_with_arima(stock_data)
-        else:
-            forecast_df = forecast_with_sarima(stock_data)
-        plot_with_indicators(stock_data, forecast_df, f'{ticker} - {forecast_method} Forecast')
+# =========================
+# CSV MODE
+# =========================
 else:
-    st.write("No data available. Please select a data source or upload a CSV file.")
+    st.title("📂 CSV Forecast")
+
+    file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    if not file:
+        st.stop()
+
+    df = pd.read_csv(file)
+
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+
+    df = normalize(df)
+
+    st.subheader(f"Trend: {market_trend(df)}")
+
+    # ---- TABLE ----
+    st.subheader("📄 Uploaded Data")
+    cols = [c for c in ['Open','High','Low','Close'] if c in df.columns]
+    st.dataframe(df[cols].tail(200), use_container_width=True)
+
+    forecast = forecast_with_band(df, days)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="Historical"))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Forecast'],
+                             name="Forecast", line=dict(dash="dot")))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Upper'],
+                             showlegend=False, line=dict(width=0)))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Lower'],
+                             fill='tonexty', name="Range",
+                             fillcolor='rgba(249,115,22,0.25)',
+                             line=dict(width=0)))
+
+    fig.update_layout(template="plotly_dark", height=550)
+    st.plotly_chart(fig, use_container_width=True)
