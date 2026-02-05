@@ -156,8 +156,13 @@ if mode == "Single Market Forecast":
                                  fillcolor='rgba(34,197,94,0.25)',
                                  line=dict(width=0)))
 
-    fig.update_layout(template="plotly_dark", height=550)
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(
+        template="plotly_dark",
+        height=550,
+        font=dict(family="Inter, Arial, sans-serif", color="#cbd5e1"),
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
 
 # =========================
 # BANK COMPARISON
@@ -182,8 +187,13 @@ elif mode == "Bank-wise Comparison":
         x=heat_df.columns,
         colorscale='RdYlGn'
     ))
-    fig.update_layout(height=400, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(
+        height=400,
+        template="plotly_dark",
+        font=dict(family="Inter, Arial, sans-serif", color="#cbd5e1"),
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
 
     st.subheader("📄 Bank Performance Table")
     st.dataframe(heat_df.style.format("{:.2f}%"))
@@ -226,5 +236,10 @@ else:
                              fillcolor='rgba(249,115,22,0.25)',
                              line=dict(width=0)))
 
-    fig.update_layout(template="plotly_dark", height=550)
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(
+        template="plotly_dark",
+        height=550,
+        font=dict(family="Inter, Arial, sans-serif", color="#cbd5e1"),
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
